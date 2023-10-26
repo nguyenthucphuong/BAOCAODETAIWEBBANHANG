@@ -12,6 +12,8 @@ using SaleApi.Models.ViewModels;
 using Common.Utilities;
 using Microsoft.AspNetCore.Routing;
 using System.Security.Claims;
+using Microsoft.AspNetCore.Authorization;
+using System.Data;
 
 namespace SaleApi.Controllers
 {
@@ -167,7 +169,6 @@ namespace SaleApi.Controllers
 			var result = new ApiResponse();
 			if (ModelState.IsValid)
 			{
-				// Kiểm tra xem tên đã tồn tại hay chưa
 				var exists = await CheckName(input);
 				if (exists)
 				{
@@ -176,16 +177,14 @@ namespace SaleApi.Controllers
 					return result;
 				}
 
-				ProductEx? item;
 				try
 				{
 					var imageFile = Request.Form.Files["imageFile"];
 					if (imageFile != null)
 					{
-						input.ProductImage = _uploadService.UploadImage(imageFile);
+						input.ProductImage = _uploadService.UploadImageString(imageFile);
 					}
-
-					item = new ProductEx(input);
+					var item = new ProductEx(input);
 
 					var userName = HttpContext.User.Claims.FirstOrDefault(c => c.Type == ClaimTypes.Name)?.Value;
 					if (userName == null)
@@ -200,9 +199,9 @@ namespace SaleApi.Controllers
 					item.UserId = userId;
 
 					item.CategoryId = await _context.Categories
-	 .Where(c => c.CategoryName == input.CategoryName)
-	 .Select(c => c.CategoryId)
-	 .FirstOrDefaultAsync() ?? _configuration["default:CategoryId"];
+		.Where(c => c.CategoryName == input.CategoryName)
+		.Select(c => c.CategoryId)
+		.FirstOrDefaultAsync() ?? _configuration["default:CategoryId"];
 
 					item.PromotionId = await _context.Promotions
 						.Where(c => c.PromotionName == input.PromotionName)
@@ -249,10 +248,9 @@ namespace SaleApi.Controllers
 
 			if (ModelState.IsValid)
 			{
-				// Tên cần cập nhật khác với tên hiện có thì mới kiểm tra 
+				// Tên cần cập nhật khác với tên hiện có thì mới kiểm tra trùng lặp trong dữ liệu 
 				if (item.ProductName != input.ProductName)
 				{
-					// Kiểm tra xem tên đã tồn tại hay chưa
 					var exists = await CheckName(input);
 					if (exists)
 					{
@@ -263,12 +261,23 @@ namespace SaleApi.Controllers
 				}
 
 				var imageFile = Request.Form.Files["imageFile"];
+
 				if (imageFile != null)
 				{
-					var imagePath = _uploadService.UploadImage(imageFile);
-					item.ProductImage = imagePath;
-				}
+					// Lưu đường dẫn của hình ảnh cũ để xóa nếu tải ảnh mới lên thành công
+					var oldImagePath = item.ProductImage;
 
+					var newImagePath = _uploadService.UploadImageString(imageFile);
+					if (!string.IsNullOrEmpty(newImagePath))
+					{
+						item.ProductImage = newImagePath;
+
+						if (!string.IsNullOrEmpty(oldImagePath))
+						{
+							_uploadService.DeleteImage(oldImagePath);
+						}
+					}
+				}
 				var userName = HttpContext.User.Claims.FirstOrDefault(c => c.Type == ClaimTypes.Name)?.Value;
 				if (userName == null)
 				{
@@ -281,9 +290,9 @@ namespace SaleApi.Controllers
 
 				item.UserId = userId;
 				item.CategoryId = await _context.Categories
-	 .Where(c => c.CategoryName == input.CategoryName)
-	 .Select(c => c.CategoryId)
-	 .FirstOrDefaultAsync() ?? _configuration["default:CategoryId"];
+		.Where(c => c.CategoryName == input.CategoryName)
+		.Select(c => c.CategoryId)
+		.FirstOrDefaultAsync() ?? _configuration["default:CategoryId"];
 
 				item.PromotionId = await _context.Promotions
 					.Where(c => c.PromotionName == input.PromotionName)
@@ -320,5 +329,56 @@ namespace SaleApi.Controllers
 			}
 			return result;
 		}
+
+		[Authorize(Roles = "Admin")]
+		[HttpDelete("xoa/{id}")]
+		public override async Task<ActionResult<ApiResponse>> XoaModelId(string id)
+		{
+			var result = new ApiResponse();
+			var (tonTai, item) = await CheckId(id);
+			if (!tonTai)
+			{
+				result.Success = false;
+				result.Message = "Không tìm thấy đối tượng";
+				return result;
+			}
+			else if (item != null)
+			{
+				if (item.IsActive == false)
+				{
+					// Xóa hình ảnh của sản phẩm trước khi xóa sản phẩm
+					if (!string.IsNullOrEmpty(item.ProductImage))
+					{
+						_uploadService.DeleteImage(item.ProductImage);
+					}
+
+					_context.Remove(item);
+					await _context.SaveChangesAsync();
+
+					result.Success = true;
+					result.Message = "Xóa thành công!";
+					return result;
+				}
+				else
+				{
+					item.IsActive = false;
+					await _context.SaveChangesAsync();
+					result.Success = false;
+					result.Message = "Đã được tạm khóa trước khi xóa!";
+					return result;
+				}
+			}
+			result.Success = false;
+			result.Message = "Không thể xóa đối tượng";
+			return result;
+		}
+
+		[HttpGet("GetImage")]
+		public IActionResult GetImage(string path)
+		{
+			var image = System.IO.File.OpenRead(path);
+			return File(image, "image/jpeg");
+		}
+
 	}
 }
