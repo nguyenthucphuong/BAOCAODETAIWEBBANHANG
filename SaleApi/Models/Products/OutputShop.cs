@@ -15,7 +15,6 @@ namespace SaleApi.Models.Products
 		public bool IsNew { get; set; }
 		public bool IsSale { get; set; }
 		public bool IsPro { get; set; }
-
 	}
 
 }
